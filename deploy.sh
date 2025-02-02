@@ -1,4 +1,18 @@
 #!/bin/bash
+set -e
+
+# --- Skip local sourcing of .env; the .env file is included in the deployment package ---
+echo "Note: The .env file will be used on the EC2 instance."
+
+# --- AWS/ECR configuration ---
+export AWS_REGION="ap-south-1"
+export AWS_ACCOUNT_ID="324037305534"
+export ECR_REPO_NAME="ishay_lavagna_ecr"
+# Explicitly define the ECR URI so that region is not empty
+export ECR_URI="324037305534.dkr.ecr.ap-south-1.amazonaws.com/ishay_lavagna_ecr"
+
+echo "AWS_REGION: ${AWS_REGION}"
+echo "ECR_URI: ${ECR_URI}"
 
 # Ensure a tag is provided, else exit with an error
 if [ -z "$1" ]; then
@@ -6,19 +20,14 @@ if [ -z "$1" ]; then
   echo "Usage: ./deploy.sh <tag>"
   exit 1
 else
-  IMAGE_TAG="$1"  
+  IMAGE_TAG="$1"
 fi
 
-AWS_REGION="ap-south-1"
-AWS_ACCOUNT_ID="324037305534"
-ECR_REPO_NAME="ishay_lavagna_ecr"
-ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
-
 EC2_USER="ubuntu"
-EC2_HOST="65.0.181.101"
-SSH_KEY="../ishay.aws2.pem"  
+EC2_HOST="43.204.111.61"
+SSH_KEY="../ishay.aws2.pem"
 
-DEPLOY_PACKAGE="lavagna-startup-package_${IMAGE_TAG}.tar.gz"  # Use the tag in the deployment package name
+DEPLOY_PACKAGE="lavagna-startup-package_${IMAGE_TAG}.tar.gz"
 
 echo "Starting Deployment..."
 
@@ -28,14 +37,12 @@ if [[ ! -f ${DEPLOY_PACKAGE} ]]; then
     exit 1
 fi
 
-# Step 1: Docker login
+# Step 1: Docker login to ECR
 echo "Logging into AWS ECR..."
-
-# Ensure the AWS region is set
-export AWS_REGION=${AWS_REGION}
-
-# Log into ECR using the proper credentials
-aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}
+# Disable the AWS CLI pager to avoid interactive prompts
+aws configure set cli_pager ""
+# Use a hard-coded region and URI to ensure the endpoint is correct.
+aws ecr get-login-password --region "ap-south-1" | docker login --username AWS --password-stdin "${ECR_URI}"
 
 # Step 2: Clean up any old deployment files on the EC2 instance
 echo "Cleaning up old deployment files on EC2..."
@@ -50,7 +57,7 @@ scp -i ${SSH_KEY} ${DEPLOY_PACKAGE} ${EC2_USER}@${EC2_HOST}:/home/ubuntu/
 echo "Extracting package on EC2..."
 ssh -i ${SSH_KEY} ${EC2_USER}@${EC2_HOST} "mkdir -p /home/ubuntu/lavagna-deployment && tar -xzvf /home/ubuntu/${DEPLOY_PACKAGE} -C /home/ubuntu/lavagna-deployment/"
 
-# Step 5: Check Docker version on EC2 (optional)
+# Step 5: Check Docker installation on EC2 (optional)
 echo "Verifying Docker installation on EC2..."
 ssh -i ${SSH_KEY} ${EC2_USER}@${EC2_HOST} "docker --version || (echo 'Docker not found, installing...' && sudo apt-get update && sudo apt-get install -y docker.io)"
 
@@ -69,17 +76,14 @@ ssh -i ${SSH_KEY} ${EC2_USER}@${EC2_HOST} "bash /home/ubuntu/lavagna-deployment/
 # Step 9: Check if containers are running after deployment
 echo "Checking Docker containers on EC2..."
 docker_status=$(ssh -i ${SSH_KEY} ${EC2_USER}@${EC2_HOST} "docker ps -q")
-
-# If no containers are running, something went wrong
 if [[ -z "$docker_status" ]]; then
     echo "Error: No running containers found on EC2!"
     exit 1
 fi
 
-# Step 10: Check if the specific application container (lavagna) is running
+# Step 10: Check if the lavagna container is running
 echo "Checking if the lavagna container is running..."
 lavagna_container=$(ssh -i ${SSH_KEY} ${EC2_USER}@${EC2_HOST} "docker ps -q --filter name=lavagna-app")
-
 if [[ -z "$lavagna_container" ]]; then
     echo "Error: The lavagna container is not running!"
     exit 1
@@ -89,5 +93,4 @@ fi
 echo "Checking logs for the lavagna container..."
 ssh -i ${SSH_KEY} ${EC2_USER}@${EC2_HOST} "docker logs ${lavagna_container}"
 
-# Confirm deployment success
 echo "Deployment Completed Successfully!"
